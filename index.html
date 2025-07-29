@@ -114,6 +114,8 @@
 
             useEffect(() => {
                 if (selectedSurah && selectedReciter) {
+                    setIsPlaying(false);
+                    audioRef.current.pause();
                     fetch(`https://api.alquran.cloud/v1/surah/${selectedSurah.number}/${selectedReciter.identifier}`)
                         .then(res => res.json())
                         .then(data => {
@@ -121,7 +123,6 @@
                             setCurrentAyah(1);
                             setRangeFrom(1);
                             setRangeTo(Math.min(10, data.data.ayahs.length));
-                            setIsPlaying(false);
                             setHideAyah(false);
                             setRecitationResult(null);
                             setFeedback('');
@@ -145,6 +146,7 @@
                     };
                     recognition.onresult = (event) => {
                         const transcript = event.results[0][0].transcript;
+                        console.log("Transcript:", transcript);
                         checkRecitation(transcript);
                     };
                     recognitionRef.current = recognition;
@@ -156,9 +158,10 @@
             const handlePlayPause = () => {
                 if (isPlaying) {
                     audioRef.current.pause();
+                    setIsPlaying(false);
                 } else {
                     let startAyah = currentAyah;
-                    if (playbackMode === 'range') {
+                     if (playbackMode === 'range') {
                         const from = parseInt(rangeFrom, 10);
                         const to = parseInt(rangeTo, 10);
                         if (isNaN(from) || isNaN(to) || from < 1 || to > ayahs.length || from > to) {
@@ -170,7 +173,9 @@
                          startAyah = 1;
                     }
                     
-                    setCurrentAyah(startAyah);
+                    if (startAyah !== currentAyah) {
+                        setCurrentAyah(startAyah);
+                    }
                     setIsPlaying(true);
                 }
             };
@@ -195,10 +200,10 @@
             };
 
             useEffect(() => {
-                if (isPlaying && audioRef.current && ayahs.length > 0) {
+                if (isPlaying && ayahs.length > 0) {
                     const currentAudioSrc = ayahs.find(a => a.numberInSurah === currentAyah)?.audio;
                     if (currentAudioSrc) {
-                        if(audioRef.current.src !== currentAudioSrc) {
+                        if (audioRef.current.src !== currentAudioSrc) {
                             audioRef.current.src = currentAudioSrc;
                         }
                         audioRef.current.play().catch(e => {
@@ -208,14 +213,14 @@
                     } else {
                         setIsPlaying(false);
                     }
-                } else if (!isPlaying && audioRef.current) {
+                } else if (!isPlaying) {
                     audioRef.current.pause();
                 }
                 
                 if(ayahRefs.current[currentAyah]) {
                     ayahRefs.current[currentAyah].scrollIntoView({ behavior: 'smooth', block: 'center' });
                 }
-            }, [currentAyah, isPlaying, ayahs]);
+            }, [currentAyah, isPlaying]);
 
             const handleAyahClick = (ayahNumber) => {
                 setCurrentAyah(ayahNumber);

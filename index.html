@@ -115,7 +115,7 @@
             useEffect(() => {
                 if (selectedSurah && selectedReciter) {
                     setIsPlaying(false);
-                    audioRef.current.pause();
+                    if(audioRef.current) audioRef.current.pause();
                     fetch(`https://api.alquran.cloud/v1/surah/${selectedSurah.number}/${selectedReciter.identifier}`)
                         .then(res => res.json())
                         .then(data => {
@@ -146,7 +146,6 @@
                     };
                     recognition.onresult = (event) => {
                         const transcript = event.results[0][0].transcript;
-                        console.log("Transcript:", transcript);
                         checkRecitation(transcript);
                     };
                     recognitionRef.current = recognition;
@@ -175,8 +174,9 @@
                     
                     if (startAyah !== currentAyah) {
                         setCurrentAyah(startAyah);
+                    } else {
+                        setIsPlaying(true);
                     }
-                    setIsPlaying(true);
                 }
             };
 
@@ -206,14 +206,17 @@
                         if (audioRef.current.src !== currentAudioSrc) {
                             audioRef.current.src = currentAudioSrc;
                         }
-                        audioRef.current.play().catch(e => {
-                            console.error("Audio play error:", e);
-                            setIsPlaying(false);
-                        });
+                        const playPromise = audioRef.current.play();
+                        if (playPromise !== undefined) {
+                            playPromise.catch(error => {
+                                console.error("Audio play error:", error);
+                                setIsPlaying(false);
+                            });
+                        }
                     } else {
                         setIsPlaying(false);
                     }
-                } else if (!isPlaying) {
+                } else if (!isPlaying && audioRef.current) {
                     audioRef.current.pause();
                 }
                 
@@ -377,7 +380,7 @@
                         </div>
                     </footer>
                     
-                    <audio ref={audioRef} onEnded={handleAudioEnded} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} className="hidden" />
+                    <audio ref={audioRef} onEnded={handleAudioEnded} className="hidden" />
 
                     {isAssistantOpen && (
                         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">

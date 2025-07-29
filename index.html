@@ -37,6 +37,15 @@
                 opacity: .75;
             }
         }
+        /* Hide number input spinners */
+        input[type='number']::-webkit-inner-spin-button,
+        input[type='number']::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        input[type='number'] {
+            -moz-appearance: textfield;
+        }
     </style>
 </head>
 <body class="bg-gray-50 dark:bg-gray-900">
@@ -46,11 +55,9 @@
         // Helper components for SVG icons
         const Icon = ({ children, className }) => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>{children}</svg>;
         const ChevronDown = ({ className }) => <Icon className={className}><path d="m6 9 6 6 6-6"/></Icon>;
-        const ChevronUp = ({ className }) => <Icon className={className}><path d="m18 15-6-6-6 6"/></Icon>;
         const Play = ({ className }) => <Icon className={className}><polygon points="5 3 19 12 5 21 5 3"/></Icon>;
         const Pause = ({ className }) => <Icon className={className}><rect width="6" height="16" x="6" y="4"/><rect width="6" height="16" x="14" y="4"/></Icon>;
         const Mic = ({ className }) => <Icon className={className}><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></Icon>;
-        const Bookmark = ({ className }) => <Icon className={className}><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></Icon>;
         const HelpCircle = ({ className }) => <Icon className={className}><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></Icon>;
         const X = ({ className }) => <Icon className={className}><path d="M18 6 6 18"/><path d="m6 6 12 12"/></Icon>;
         const Eye = ({ className }) => <Icon className={className}><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></Icon>;
@@ -69,21 +76,21 @@
             const [isPlaying, setIsPlaying] = useState(false);
             const [isRecording, setIsRecording] = useState(false);
             const [feedback, setFeedback] = useState('');
-            const [bookmarks, setBookmarks] = useState({});
             const [isSurahListOpen, setIsSurahListOpen] = useState(false);
             const [isReciterListOpen, setIsReciterListOpen] = useState(false);
             const [isAssistantOpen, setIsAssistantOpen] = useState(false);
             const [hideAyah, setHideAyah] = useState(false);
             const [recitationResult, setRecitationResult] = useState(null);
-            const [correctionMode, setCorrectionMode] = useState('detailed'); // 'words' or 'detailed'
+            const [correctionMode, setCorrectionMode] = useState('detailed');
+            const [playbackMode, setPlaybackMode] = useState('surah'); // 'single', 'surah', 'range'
+            const [rangeFrom, setRangeFrom] = useState(1);
+            const [rangeTo, setRangeTo] = useState(10);
 
             const audioRef = useRef(null);
             const recognitionRef = useRef(null);
             const ayahRefs = useRef({});
 
-            // Fetch list of Surahs and Reciters
             useEffect(() => {
-                // Fetch Surahs
                 fetch('https://api.alquran.cloud/v1/surah')
                     .then(res => res.json())
                     .then(data => {
@@ -92,7 +99,6 @@
                     })
                     .catch(err => console.error("Error fetching surahs:", err));
 
-                // Fetch Reciters
                 fetch('https://api.alquran.cloud/v1/edition?format=audio&language=ar&type=versebyverse')
                     .then(res => res.json())
                     .then(data => {
@@ -103,7 +109,6 @@
                     .catch(err => console.error("Error fetching reciters:", err));
             }, []);
 
-            // Fetch Ayahs when surah or reciter changes
             useEffect(() => {
                 if (selectedSurah && selectedReciter) {
                     fetch(`https://api.alquran.cloud/v1/surah/${selectedSurah.number}/${selectedReciter.identifier}`)
@@ -111,6 +116,8 @@
                         .then(data => {
                             setAyahs(data.data.ayahs);
                             setCurrentAyah(1);
+                            setRangeFrom(1);
+                            setRangeTo(Math.min(10, data.data.ayahs.length));
                             setIsPlaying(false);
                             setHideAyah(false);
                             setRecitationResult(null);
@@ -120,7 +127,6 @@
                 }
             }, [selectedSurah, selectedReciter]);
 
-            // Setup Speech Recognition
             useEffect(() => {
                 if ('webkitSpeechRecognition' in window) {
                     const recognition = new window.webkitSpeechRecognition();
@@ -147,18 +153,42 @@
             const handlePlayPause = () => {
                 if (isPlaying) {
                     audioRef.current.pause();
+                    setIsPlaying(false);
                 } else {
-                    if (audioRef.current.src !== ayahs.find(a => a.numberInSurah === currentAyah)?.audio) {
-                        audioRef.current.src = ayahs.find(a => a.numberInSurah === currentAyah)?.audio;
+                    let startAyah = currentAyah;
+                    if (playbackMode === 'range') {
+                        const from = parseInt(rangeFrom, 10);
+                        const to = parseInt(rangeTo, 10);
+                        if (isNaN(from) || isNaN(to) || from < 1 || to > ayahs.length || from > to) {
+                            setFeedback('نطاق الآيات المحدد غير صالح.');
+                            return;
+                        }
+                        startAyah = from;
+                    } else if (playbackMode === 'surah' && currentAyah > ayahs.length) {
+                         startAyah = 1;
                     }
-                    audioRef.current.play().catch(e => console.error("Audio play error:", e));
+                    
+                    setCurrentAyah(startAyah);
+                    setIsPlaying(true);
                 }
-                setIsPlaying(!isPlaying);
             };
 
             const handleAudioEnded = () => {
-                if (currentAyah < ayahs.length) {
-                    setCurrentAyah(prev => prev + 1);
+                let nextAyah = -1;
+
+                if (playbackMode === 'surah') {
+                    if (currentAyah < ayahs.length) {
+                        nextAyah = currentAyah + 1;
+                    }
+                } else if (playbackMode === 'range') {
+                    const to = parseInt(rangeTo, 10);
+                    if (currentAyah < to) {
+                        nextAyah = currentAyah + 1;
+                    }
+                }
+
+                if (nextAyah !== -1) {
+                    setCurrentAyah(nextAyah);
                 } else {
                     setIsPlaying(false);
                 }
@@ -167,10 +197,17 @@
             useEffect(() => {
                 if (isPlaying && audioRef.current && ayahs.length > 0) {
                     const currentAudioSrc = ayahs.find(a => a.numberInSurah === currentAyah)?.audio;
-                    if(audioRef.current.src !== currentAudioSrc) {
-                        audioRef.current.src = currentAudioSrc;
+                    if (currentAudioSrc) {
+                        if(audioRef.current.src !== currentAudioSrc) {
+                            audioRef.current.src = currentAudioSrc;
+                        }
+                        audioRef.current.play().catch(e => {
+                            console.error("Audio play error:", e);
+                            setIsPlaying(false);
+                        });
+                    } else {
+                        setIsPlaying(false); // Stop if audio source not found
                     }
-                    audioRef.current.play().catch(e => console.error("Audio play error:", e));
                 }
                 if(ayahRefs.current[currentAyah]) {
                     ayahRefs.current[currentAyah].scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -195,41 +232,23 @@
                 if (removeTashkeel) {
                      text = text.replace(/[\u064B-\u0652]/g, ""); // Remove Tashkeel
                 }
-                return text
-                    .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"")
-                    .replace(/\s{2,}/g," ")
-                    .replace(/[أإآا]/g, 'ا')
-                    .replace(/[ى]/g, 'ي')
-                    .replace(/[ؤ]/g, 'و')
-                    .replace(/[ة]/g, 'ه')
-                    .trim();
+                return text.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"").replace(/\s{2,}/g," ").replace(/[أإآا]/g, 'ا').replace(/[ى]/g, 'ي').replace(/[ؤ]/g, 'و').replace(/[ة]/g, 'ه').trim();
             };
 
             const checkRecitation = (transcript) => {
                 const originalAyah = ayahs.find(a => a.numberInSurah === currentAyah);
                 if (!originalAyah) return;
 
-                if (correctionMode === 'words') {
-                    const normalizedOriginal = normalizeText(originalAyah.text);
-                    const normalizedTranscript = normalizeText(transcript);
-                    if (normalizedOriginal === normalizedTranscript) {
-                        setFeedback('ممتاز! تلاوة صحيحة.');
-                        setRecitationResult({ correct: true, text: originalAyah.text });
-                    } else {
-                         setFeedback('هناك أخطاء في الكلمات. الكلمات باللون الأحمر غير صحيحة.');
-                         const diff = generateDiff(originalAyah.text, transcript, true);
-                         setRecitationResult({ correct: false, text: diff });
-                    }
-                } else { // 'detailed' mode
-                    const diff = generateDiff(originalAyah.text, transcript, false);
-                    const isCorrect = !diff.some(d => d.props.className.includes('red'));
-                    if (isCorrect) {
-                        setFeedback('ممتاز! تلاوة صحيحة.');
-                        setRecitationResult({ correct: true, text: originalAyah.text });
-                    } else {
-                        setFeedback('هناك أخطاء. الكلمات بالأحمر غير صحيحة أو ناقصة.');
-                        setRecitationResult({ correct: false, text: diff });
-                    }
+                const isWordsOnly = correctionMode === 'words';
+                const diff = generateDiff(originalAyah.text, transcript, isWordsOnly);
+                const isCorrect = !diff.some(d => d.props.className.includes('red'));
+
+                if (isCorrect) {
+                    setFeedback('ممتاز! تلاوة صحيحة.');
+                    setRecitationResult({ correct: true, text: originalAyah.text });
+                } else {
+                    setFeedback(isWordsOnly ? 'هناك أخطاء في الكلمات. الكلمات باللون الأحمر غير صحيحة.' : 'هناك أخطاء. الكلمات بالأحمر غير صحيحة أو ناقصة.');
+                    setRecitationResult({ correct: false, text: diff });
                 }
 
                 if(hideAyah) {
@@ -240,16 +259,11 @@
             const generateDiff = (original, recited, wordsOnly = false) => {
                 const originalWords = original.split(' ');
                 const recitedWords = recited.split(' ');
-                
                 return originalWords.map((originalWord, index) => {
                     const recitedWord = recitedWords[index] || '';
                     const normalizedOriginal = normalizeText(originalWord, wordsOnly);
                     const normalizedRecited = normalizeText(recitedWord, wordsOnly);
-
-                    const className = normalizedOriginal === normalizedRecited 
-                        ? 'text-green-500' 
-                        : 'text-red-500 underline decoration-wavy';
-                    
+                    const className = normalizedOriginal === normalizedRecited ? 'text-green-500' : 'text-red-500 underline decoration-wavy';
                     return React.createElement('span', { key: index, className: className, children: originalWord + ' ' });
                 });
             };
@@ -267,14 +281,9 @@
                 }
 
                 return (
-                    <div
-                        ref={el => ayahRefs.current[ayah.numberInSurah] = el}
-                        onClick={() => handleAyahClick(ayah.numberInSurah)}
-                        className={`p-4 my-2 cursor-pointer transition-all duration-300 rounded-lg ${isCurrent ? 'bg-green-100 dark:bg-green-900/50 ring-2 ring-green-500' : 'hover:bg-gray-100 dark:hover:bg-gray-800'}`}
-                    >
+                    <div ref={el => ayahRefs.current[ayah.numberInSurah] = el} onClick={() => handleAyahClick(ayah.numberInSurah)} className={`p-4 my-2 cursor-pointer transition-all duration-300 rounded-lg ${isCurrent ? 'bg-green-100 dark:bg-green-900/50 ring-2 ring-green-500' : 'hover:bg-gray-100 dark:hover:bg-gray-800'}`}>
                         <div className="flex justify-between items-center mb-4">
-                            <span className="text-sm font-bold text-green-600 dark:text-green-400">{selectedSurah.number}:{ayah.numberInSurah}</span>
-                            {/* Bookmark button can be added here if needed */}
+                            <span className="text-sm font-bold text-green-600 dark:text-green-400">{selectedSurah?.number}:{ayah.numberInSurah}</span>
                         </div>
                         <p className="text-3xl leading-loose font-quran text-right text-gray-800 dark:text-gray-200">
                             {showResult ? recitationResult.text : ayah.text}
@@ -293,7 +302,6 @@
                     </header>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                        {/* Surah Selector */}
                         <div className="relative">
                             <button onClick={() => setIsSurahListOpen(!isSurahListOpen)} className="w-full bg-white dark:bg-gray-800 p-4 rounded-lg shadow-md flex justify-between items-center text-right">
                                 <span>{selectedSurah ? `${selectedSurah.number}. ${selectedSurah.name}` : 'اختر سورة'}</span>
@@ -301,15 +309,10 @@
                             </button>
                             {isSurahListOpen && (
                                 <div className="absolute z-20 w-full mt-2 bg-white dark:bg-gray-800 rounded-lg shadow-lg max-h-60 overflow-y-auto border dark:border-gray-700">
-                                    {surahs.map(s => (
-                                        <div key={s.number} onClick={() => { setSelectedSurah(s); setIsSurahListOpen(false); }} className="p-4 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer text-right">
-                                            {s.number}. {s.name}
-                                        </div>
-                                    ))}
+                                    {surahs.map(s => <div key={s.number} onClick={() => { setSelectedSurah(s); setIsSurahListOpen(false); }} className="p-4 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer text-right">{s.number}. {s.name}</div>)}
                                 </div>
                             )}
                         </div>
-                        {/* Reciter Selector */}
                         <div className="relative">
                             <button onClick={() => setIsReciterListOpen(!isReciterListOpen)} className="w-full bg-white dark:bg-gray-800 p-4 rounded-lg shadow-md flex justify-between items-center text-right">
                                 <span>{selectedReciter ? selectedReciter.englishName : 'اختر القارئ'}</span>
@@ -317,17 +320,13 @@
                             </button>
                             {isReciterListOpen && (
                                 <div className="absolute z-20 w-full mt-2 bg-white dark:bg-gray-800 rounded-lg shadow-lg max-h-60 overflow-y-auto border dark:border-gray-700">
-                                    {reciters.map(r => (
-                                        <div key={r.identifier} onClick={() => { setSelectedReciter(r); setIsReciterListOpen(false); }} className="p-4 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer text-right">
-                                            {r.englishName}
-                                        </div>
-                                    ))}
+                                    {reciters.map(r => <div key={r.identifier} onClick={() => { setSelectedReciter(r); setIsReciterListOpen(false); }} className="p-4 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer text-right">{r.englishName}</div>)}
                                 </div>
                             )}
                         </div>
                     </div>
 
-                    <main className="bg-white dark:bg-gray-800 p-2 sm:p-6 rounded-lg shadow-md mb-40">
+                    <main className="bg-white dark:bg-gray-800 p-2 sm:p-6 rounded-lg shadow-md pb-56">
                         {selectedSurah && <h2 className="text-2xl font-bold text-center mb-4 font-quran">{selectedSurah.name}</h2>}
                         <div>
                             {ayahs.length > 0 ? ayahs.map(ayah => <AyahText key={ayah.numberInSurah} ayah={ayah} />) : <p className="text-center p-8">...جاري التحميل</p>}
@@ -335,16 +334,21 @@
                     </main>
 
                     <footer className="fixed bottom-0 left-0 right-0 bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm border-t border-gray-200 dark:border-gray-700">
-                        <div className="container mx-auto max-w-3xl p-4">
-                             <div className="flex items-center justify-center gap-2 sm:gap-4 mb-3">
-                                <label className="text-sm">وضع التصحيح:</label>
-                                <button onClick={() => setCorrectionMode('words')} className={`px-3 py-1 rounded-full text-sm ${correctionMode === 'words' ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700'}`}>
-                                    الكلمات فقط
-                                </button>
-                                <button onClick={() => setCorrectionMode('detailed')} className={`px-3 py-1 rounded-full text-sm ${correctionMode === 'detailed' ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700'}`}>
-                                    تصحيح دقيق
-                                </button>
+                        <div className="container mx-auto max-w-3xl p-4 space-y-3">
+                            <div className="flex items-center justify-center gap-2 sm:gap-4">
+                                <label className="text-sm font-bold">الاستماع:</label>
+                                <button onClick={() => setPlaybackMode('single')} className={`px-3 py-1 rounded-full text-sm ${playbackMode === 'single' ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700'}`}>آية واحدة</button>
+                                <button onClick={() => setPlaybackMode('surah')} className={`px-3 py-1 rounded-full text-sm ${playbackMode === 'surah' ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700'}`}>سورة كاملة</button>
+                                <button onClick={() => setPlaybackMode('range')} className={`px-3 py-1 rounded-full text-sm ${playbackMode === 'range' ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700'}`}>نطاق محدد</button>
                             </div>
+                            {playbackMode === 'range' && (
+                                <div className="flex items-center justify-center gap-2 text-sm">
+                                    <label>من آية:</label>
+                                    <input type="number" value={rangeFrom} onChange={e => setRangeFrom(e.target.value)} className="w-16 p-1 text-center bg-gray-100 dark:bg-gray-700 rounded-md" min="1" max={ayahs.length}/>
+                                    <label>إلى آية:</label>
+                                    <input type="number" value={rangeTo} onChange={e => setRangeTo(e.target.value)} className="w-16 p-1 text-center bg-gray-100 dark:bg-gray-700 rounded-md" min="1" max={ayahs.length}/>
+                                </div>
+                            )}
                             <div className="flex items-center justify-center gap-4">
                                 <button onClick={handlePlayPause} className="p-4 bg-green-500 text-white rounded-full shadow-lg hover:bg-green-600 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed" disabled={!selectedSurah || isRecording}>
                                     {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6" />}
@@ -373,10 +377,9 @@
                                     <button onClick={() => setIsAssistantOpen(false)} className="p-1 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700"><X className="w-5 h-5" /></button>
                                 </div>
                                 <div className="space-y-4 text-right">
-                                    <p><strong>اختر القارئ والسورة</strong> من القوائم في الأعلى.</p>
-                                    <p><strong>اختر وضع التصحيح</strong>: "الكلمات فقط" للمقارنة بدون تشكيل، أو "تصحيح دقيق" لمقارنة تفصيلية للكلمات.</p>
-                                    <p><strong>للتسميع:</strong> اضغط على زر الميكروفون <Mic className="inline w-4 h-4 text-blue-500"/> وابدأ التلاوة. ستظهر الكلمات الصحيحة بالأخضر والخاطئة بالأحمر.</p>
-                                    <p><strong>للاختبار:</strong> اضغط زر العين <EyeOff className="inline w-4 h-4 text-gray-500"/> لإخفاء الآية قبل التسميع.</p>
+                                    <p><strong>للاستماع:</strong> اختر وضع الاستماع (آية، سورة، نطاق) ثم اضغط زر التشغيل <Play className="inline w-4 h-4 text-green-500"/>.</p>
+                                    <p><strong>للتسميع:</strong> اضغط زر الميكروفون <Mic className="inline w-4 h-4 text-blue-500"/> وابدأ التلاوة.</p>
+                                    <p><strong>للاختبار:</strong> اضغط زر العين <EyeOff className="inline w-4 h-4 text-gray-500"/> لإخفاء الآية.</p>
                                 </div>
                             </div>
                         </div>

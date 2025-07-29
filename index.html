@@ -64,9 +64,29 @@
         const Eye = ({ className }) => <Icon className={className}><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></Icon>;
         const EyeOff = ({ className }) => <Icon className={className}><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></Icon>;
 
+        // Helper functions moved outside the component to prevent re-creation on every render
+        const normalizeText = (text, removeTashkeel = true) => {
+            if (removeTashkeel) {
+                text = text.replace(/[\u064B-\u0652]/g, ""); // Remove Tashkeel
+            }
+            return text.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"").replace(/\s{2,}/g," ").replace(/[أإآا]/g, 'ا').replace(/[ى]/g, 'ي').replace(/[ؤ]/g, 'و').replace(/[ة]/g, 'ه').trim();
+        };
+
+        const generateDiff = (original, recited, wordsOnly = false) => {
+            const originalWords = original.split(' ');
+            const recitedWords = recited.split(' ');
+            return originalWords.map((originalWord, index) => {
+                const recitedWord = recitedWords[index] || '';
+                const normalizedOriginal = normalizeText(originalWord, wordsOnly);
+                const normalizedRecited = normalizeText(recitedWord, wordsOnly);
+                const className = normalizedOriginal === normalizedRecited ? 'text-green-500' : 'text-red-500 underline decoration-wavy';
+                return React.createElement('span', { key: index, className: className, children: originalWord + ' ' });
+            });
+        };
+
         // Main App Component
         function App() {
-            const { useState, useEffect, useRef } = React;
+            const { useState, useEffect, useRef, useCallback } = React;
 
             const [surahs, setSurahs] = useState([]);
             const [reciters, setReciters] = useState([]);
@@ -83,7 +103,7 @@
             const [hideAyah, setHideAyah] = useState(false);
             const [recitationResult, setRecitationResult] = useState(null);
             const [correctionMode, setCorrectionMode] = useState('detailed');
-            const [playbackMode, setPlaybackMode] = useState('surah'); // 'single', 'surah', 'range'
+            const [playbackMode, setPlaybackMode] = useState('surah');
             const [rangeFrom, setRangeFrom] = useState(1);
             const [rangeTo, setRangeTo] = useState(10);
 
@@ -96,9 +116,7 @@
                     .then(res => res.json())
                     .then(data => {
                         setSurahs(data.data);
-                        if (data.data.length > 0) {
-                            setSelectedSurah(data.data[0]);
-                        }
+                        if (data.data.length > 0) setSelectedSurah(data.data[0]);
                     })
                     .catch(err => console.error("Error fetching surahs:", err));
 
@@ -131,6 +149,27 @@
                 }
             }, [selectedSurah, selectedReciter]);
 
+            const checkRecitation = useCallback((transcript) => {
+                const originalAyah = ayahs.find(a => a.numberInSurah === currentAyah);
+                if (!originalAyah) return;
+
+                const isWordsOnly = correctionMode === 'words';
+                const diff = generateDiff(originalAyah.text, transcript, isWordsOnly);
+                const isCorrect = !diff.some(d => d.props.className.includes('red'));
+
+                if (isCorrect) {
+                    setFeedback('ممتاز! تلاوة صحيحة.');
+                    setRecitationResult({ correct: true, text: originalAyah.text });
+                } else {
+                    setFeedback(isWordsOnly ? 'هناك أخطاء في الكلمات.' : 'هناك أخطاء في التلاوة.');
+                    setRecitationResult({ correct: false, text: diff });
+                }
+
+                if(hideAyah) {
+                    setHideAyah(false);
+                }
+            }, [ayahs, currentAyah, correctionMode, hideAyah, setFeedback, setRecitationResult, setHideAyah]);
+
             useEffect(() => {
                 if ('webkitSpeechRecognition' in window) {
                     const recognition = new window.webkitSpeechRecognition();
@@ -141,7 +180,6 @@
                     recognition.onend = () => setIsRecording(false);
                     recognition.onerror = (event) => {
                         console.error('Speech recognition error:', event.error);
-                        setIsRecording(false);
                         setFeedback('عذراً، حدث خطأ في التعرف على الصوت.');
                     };
                     recognition.onresult = (event) => {
@@ -149,18 +187,21 @@
                         checkRecitation(transcript);
                     };
                     recognitionRef.current = recognition;
+
+                    return () => {
+                        recognition.abort();
+                    };
                 } else {
                     console.warn("Speech Recognition not supported in this browser.");
                 }
-            }, []); 
+            }, [checkRecitation]); 
 
             const handlePlayPause = () => {
                 if (isPlaying) {
                     audioRef.current.pause();
-                    setIsPlaying(false);
                 } else {
                     let startAyah = currentAyah;
-                     if (playbackMode === 'range') {
+                    if (playbackMode === 'range') {
                         const from = parseInt(rangeFrom, 10);
                         const to = parseInt(rangeTo, 10);
                         if (isNaN(from) || isNaN(to) || from < 1 || to > ayahs.length || from > to) {
@@ -174,10 +215,9 @@
                     
                     if (startAyah !== currentAyah) {
                         setCurrentAyah(startAyah);
-                    } else {
-                        setIsPlaying(true);
                     }
                 }
+                setIsPlaying(prev => !prev);
             };
 
             const handleAudioEnded = () => {
@@ -194,7 +234,7 @@
                     } else {
                         setIsPlaying(false);
                     }
-                } else { // 'single' mode
+                } else {
                     setIsPlaying(false);
                 }
             };
@@ -223,7 +263,7 @@
                 if(ayahRefs.current[currentAyah]) {
                     ayahRefs.current[currentAyah].scrollIntoView({ behavior: 'smooth', block: 'center' });
                 }
-            }, [currentAyah, isPlaying]);
+            }, [currentAyah, isPlaying, ayahs]);
 
             const handleAyahClick = (ayahNumber) => {
                 setCurrentAyah(ayahNumber);
@@ -237,46 +277,6 @@
                     setRecitationResult(null);
                     recognitionRef.current.start();
                 }
-            };
-            
-            const normalizeText = (text, removeTashkeel = true) => {
-                if (removeTashkeel) {
-                     text = text.replace(/[\u064B-\u0652]/g, ""); // Remove Tashkeel
-                }
-                return text.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"").replace(/\s{2,}/g," ").replace(/[أإآا]/g, 'ا').replace(/[ى]/g, 'ي').replace(/[ؤ]/g, 'و').replace(/[ة]/g, 'ه').trim();
-            };
-
-            const checkRecitation = (transcript) => {
-                const originalAyah = ayahs.find(a => a.numberInSurah === currentAyah);
-                if (!originalAyah) return;
-
-                const isWordsOnly = correctionMode === 'words';
-                const diff = generateDiff(originalAyah.text, transcript, isWordsOnly);
-                const isCorrect = !diff.some(d => d.props.className.includes('red'));
-
-                if (isCorrect) {
-                    setFeedback('ممتاز! تلاوة صحيحة.');
-                    setRecitationResult({ correct: true, text: originalAyah.text });
-                } else {
-                    setFeedback(isWordsOnly ? 'هناك أخطاء في الكلمات. الكلمات باللون الأحمر غير صحيحة.' : 'هناك أخطاء. الكلمات بالأحمر غير صحيحة أو ناقصة.');
-                    setRecitationResult({ correct: false, text: diff });
-                }
-
-                if(hideAyah) {
-                    setHideAyah(false);
-                }
-            };
-
-            const generateDiff = (original, recited, wordsOnly = false) => {
-                const originalWords = original.split(' ');
-                const recitedWords = recited.split(' ');
-                return originalWords.map((originalWord, index) => {
-                    const recitedWord = recitedWords[index] || '';
-                    const normalizedOriginal = normalizeText(originalWord, wordsOnly);
-                    const normalizedRecited = normalizeText(recitedWord, wordsOnly);
-                    const className = normalizedOriginal === normalizedRecited ? 'text-green-500' : 'text-red-500 underline decoration-wavy';
-                    return React.createElement('span', { key: index, className: className, children: originalWord + ' ' });
-                });
             };
             
             const AyahText = ({ ayah }) => {

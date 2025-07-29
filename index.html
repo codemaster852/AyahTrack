@@ -61,7 +61,9 @@
             const { useState, useEffect, useRef } = React;
 
             const [surahs, setSurahs] = useState([]);
+            const [reciters, setReciters] = useState([]);
             const [selectedSurah, setSelectedSurah] = useState(null);
+            const [selectedReciter, setSelectedReciter] = useState(null);
             const [ayahs, setAyahs] = useState([]);
             const [currentAyah, setCurrentAyah] = useState(1);
             const [isPlaying, setIsPlaying] = useState(false);
@@ -69,24 +71,54 @@
             const [feedback, setFeedback] = useState('');
             const [bookmarks, setBookmarks] = useState({});
             const [isSurahListOpen, setIsSurahListOpen] = useState(false);
+            const [isReciterListOpen, setIsReciterListOpen] = useState(false);
             const [isAssistantOpen, setIsAssistantOpen] = useState(false);
             const [hideAyah, setHideAyah] = useState(false);
             const [recitationResult, setRecitationResult] = useState(null);
+            const [correctionMode, setCorrectionMode] = useState('detailed'); // 'words' or 'detailed'
 
             const audioRef = useRef(null);
             const recognitionRef = useRef(null);
             const ayahRefs = useRef({});
 
-            // Fetch list of Surahs on component mount
+            // Fetch list of Surahs and Reciters
             useEffect(() => {
+                // Fetch Surahs
                 fetch('https://api.alquran.cloud/v1/surah')
                     .then(res => res.json())
                     .then(data => {
                         setSurahs(data.data);
-                        handleSurahSelect(data.data[0]);
+                        setSelectedSurah(data.data[0]);
                     })
                     .catch(err => console.error("Error fetching surahs:", err));
+
+                // Fetch Reciters
+                fetch('https://api.alquran.cloud/v1/edition?format=audio&language=ar&type=versebyverse')
+                    .then(res => res.json())
+                    .then(data => {
+                        const defaultReciter = data.data.find(r => r.identifier === 'ar.alafasy') || data.data[0];
+                        setReciters(data.data);
+                        setSelectedReciter(defaultReciter);
+                    })
+                    .catch(err => console.error("Error fetching reciters:", err));
             }, []);
+
+            // Fetch Ayahs when surah or reciter changes
+            useEffect(() => {
+                if (selectedSurah && selectedReciter) {
+                    fetch(`https://api.alquran.cloud/v1/surah/${selectedSurah.number}/${selectedReciter.identifier}`)
+                        .then(res => res.json())
+                        .then(data => {
+                            setAyahs(data.data.ayahs);
+                            setCurrentAyah(1);
+                            setIsPlaying(false);
+                            setHideAyah(false);
+                            setRecitationResult(null);
+                            setFeedback('');
+                        })
+                        .catch(err => console.error(`Error fetching surah data:`, err));
+                }
+            }, [selectedSurah, selectedReciter]);
 
             // Setup Speech Recognition
             useEffect(() => {
@@ -95,7 +127,6 @@
                     recognition.continuous = false;
                     recognition.interimResults = false;
                     recognition.lang = 'ar-SA';
-
                     recognition.onstart = () => setIsRecording(true);
                     recognition.onend = () => setIsRecording(false);
                     recognition.onerror = (event) => {
@@ -111,23 +142,7 @@
                 } else {
                     console.warn("Speech Recognition not supported in this browser.");
                 }
-            }, [currentAyah, ayahs, hideAyah]); // Rerun setup if dependencies change
-
-            const handleSurahSelect = (surah) => {
-                setSelectedSurah(surah);
-                setIsSurahListOpen(false);
-                setIsPlaying(false);
-                setHideAyah(false);
-                setRecitationResult(null);
-                setFeedback('');
-                fetch(`https://api.alquran.cloud/v1/surah/${surah.number}/ar.alafasy`)
-                    .then(res => res.json())
-                    .then(data => {
-                        setAyahs(data.data.ayahs);
-                        setCurrentAyah(1);
-                    })
-                    .catch(err => console.error(`Error fetching surah ${surah.number}:`, err));
-            };
+            }, []); 
 
             const handlePlayPause = () => {
                 if (isPlaying) {
@@ -150,20 +165,17 @@
             };
 
             useEffect(() => {
-                if (isPlaying && audioRef.current) {
+                if (isPlaying && audioRef.current && ayahs.length > 0) {
                     const currentAudioSrc = ayahs.find(a => a.numberInSurah === currentAyah)?.audio;
                     if(audioRef.current.src !== currentAudioSrc) {
                         audioRef.current.src = currentAudioSrc;
                     }
                     audioRef.current.play().catch(e => console.error("Audio play error:", e));
                 }
-                
-                // Scroll to current ayah
                 if(ayahRefs.current[currentAyah]) {
                     ayahRefs.current[currentAyah].scrollIntoView({ behavior: 'smooth', block: 'center' });
                 }
-
-            }, [currentAyah, isPlaying]);
+            }, [currentAyah, isPlaying, ayahs]);
 
             const handleAyahClick = (ayahNumber) => {
                 setCurrentAyah(ayahNumber);
@@ -178,8 +190,11 @@
                     recognitionRef.current.start();
                 }
             };
-
-            const normalizeText = (text) => {
+            
+            const normalizeText = (text, removeTashkeel = true) => {
+                if (removeTashkeel) {
+                     text = text.replace(/[\u064B-\u0652]/g, ""); // Remove Tashkeel
+                }
                 return text
                     .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"")
                     .replace(/\s{2,}/g," ")
@@ -194,49 +209,53 @@
                 const originalAyah = ayahs.find(a => a.numberInSurah === currentAyah);
                 if (!originalAyah) return;
 
-                const normalizedOriginal = normalizeText(originalAyah.text);
-                const normalizedTranscript = normalizeText(transcript);
-
-                if (normalizedOriginal === normalizedTranscript) {
-                    setFeedback('ممتاز! تلاوة صحيحة.');
-                    setRecitationResult({ correct: true, text: originalAyah.text });
-                } else {
-                    setFeedback('هناك بعض الأخطاء، حاول مرة أخرى.');
-                    const originalWords = originalAyah.text.split(' ');
-                    const transcriptWords = transcript.split(' ');
-                    const diff = originalWords.map((word, index) => {
-                        const normalizedOriginalWord = normalizeText(word);
-                        const normalizedTranscriptWord = normalizeText(transcriptWords[index] || '');
-                        return React.createElement('span', { 
-                            key: index, 
-                            className: normalizedOriginalWord !== normalizedTranscriptWord ? 'text-red-500 underline decoration-wavy' : '',
-                            children: word + ' '
-                        });
-                    });
-                    setRecitationResult({ correct: false, text: diff });
+                if (correctionMode === 'words') {
+                    const normalizedOriginal = normalizeText(originalAyah.text);
+                    const normalizedTranscript = normalizeText(transcript);
+                    if (normalizedOriginal === normalizedTranscript) {
+                        setFeedback('ممتاز! تلاوة صحيحة.');
+                        setRecitationResult({ correct: true, text: originalAyah.text });
+                    } else {
+                         setFeedback('هناك أخطاء في الكلمات. الكلمات باللون الأحمر غير صحيحة.');
+                         const diff = generateDiff(originalAyah.text, transcript, true);
+                         setRecitationResult({ correct: false, text: diff });
+                    }
+                } else { // 'detailed' mode
+                    const diff = generateDiff(originalAyah.text, transcript, false);
+                    const isCorrect = !diff.some(d => d.props.className.includes('red'));
+                    if (isCorrect) {
+                        setFeedback('ممتاز! تلاوة صحيحة.');
+                        setRecitationResult({ correct: true, text: originalAyah.text });
+                    } else {
+                        setFeedback('هناك أخطاء. الكلمات بالأحمر غير صحيحة أو ناقصة.');
+                        setRecitationResult({ correct: false, text: diff });
+                    }
                 }
+
                 if(hideAyah) {
                     setHideAyah(false);
                 }
             };
 
-            const toggleBookmark = (surahNumber, ayahNumber) => {
-                const key = `${surahNumber}:${ayahNumber}`;
-                setBookmarks(prev => {
-                    const newBookmarks = {...prev};
-                    if (newBookmarks[key]) {
-                        delete newBookmarks[key];
-                    } else {
-                        newBookmarks[key] = true;
-                    }
-                    // You might want to save bookmarks to localStorage here
-                    return newBookmarks;
+            const generateDiff = (original, recited, wordsOnly = false) => {
+                const originalWords = original.split(' ');
+                const recitedWords = recited.split(' ');
+                
+                return originalWords.map((originalWord, index) => {
+                    const recitedWord = recitedWords[index] || '';
+                    const normalizedOriginal = normalizeText(originalWord, wordsOnly);
+                    const normalizedRecited = normalizeText(recitedWord, wordsOnly);
+
+                    const className = normalizedOriginal === normalizedRecited 
+                        ? 'text-green-500' 
+                        : 'text-red-500 underline decoration-wavy';
+                    
+                    return React.createElement('span', { key: index, className: className, children: originalWord + ' ' });
                 });
             };
             
             const AyahText = ({ ayah }) => {
                 const isCurrent = ayah.numberInSurah === currentAyah;
-                const isBookmarked = bookmarks[`${selectedSurah.number}:${ayah.numberInSurah}`];
                 const showResult = recitationResult && isCurrent;
 
                 if (hideAyah && isCurrent && !showResult) {
@@ -255,9 +274,7 @@
                     >
                         <div className="flex justify-between items-center mb-4">
                             <span className="text-sm font-bold text-green-600 dark:text-green-400">{selectedSurah.number}:{ayah.numberInSurah}</span>
-                            <button onClick={(e) => { e.stopPropagation(); toggleBookmark(selectedSurah.number, ayah.numberInSurah); }}>
-                                <Bookmark className={`w-5 h-5 transition-colors ${isBookmarked ? 'fill-yellow-400 text-yellow-500' : 'text-gray-400 hover:text-yellow-400'}`} />
-                            </button>
+                            {/* Bookmark button can be added here if needed */}
                         </div>
                         <p className="text-3xl leading-loose font-quran text-right text-gray-800 dark:text-gray-200">
                             {showResult ? recitationResult.text : ayah.text}
@@ -275,38 +292,59 @@
                         </button>
                     </header>
 
-                    <div className="relative mb-6">
-                        <button
-                            onClick={() => setIsSurahListOpen(!isSurahListOpen)}
-                            className="w-full bg-white dark:bg-gray-800 p-4 rounded-lg shadow-md flex justify-between items-center text-right"
-                        >
-                            <span>{selectedSurah ? `${selectedSurah.number}. ${selectedSurah.name} (${selectedSurah.englishName})` : 'اختر سورة'}</span>
-                            {isSurahListOpen ? <ChevronUp /> : <ChevronDown />}
-                        </button>
-                        {isSurahListOpen && (
-                            <div className="absolute z-10 w-full mt-2 bg-white dark:bg-gray-800 rounded-lg shadow-lg max-h-72 overflow-y-auto border dark:border-gray-700">
-                                {surahs.map(s => (
-                                    <div
-                                        key={s.number}
-                                        onClick={() => handleSurahSelect(s)}
-                                        className="p-4 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer text-right"
-                                    >
-                                        {s.number}. {s.name} ({s.englishName})
-                                    </div>
-                                ))}
-                            </div>
-                        )}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                        {/* Surah Selector */}
+                        <div className="relative">
+                            <button onClick={() => setIsSurahListOpen(!isSurahListOpen)} className="w-full bg-white dark:bg-gray-800 p-4 rounded-lg shadow-md flex justify-between items-center text-right">
+                                <span>{selectedSurah ? `${selectedSurah.number}. ${selectedSurah.name}` : 'اختر سورة'}</span>
+                                <ChevronDown />
+                            </button>
+                            {isSurahListOpen && (
+                                <div className="absolute z-20 w-full mt-2 bg-white dark:bg-gray-800 rounded-lg shadow-lg max-h-60 overflow-y-auto border dark:border-gray-700">
+                                    {surahs.map(s => (
+                                        <div key={s.number} onClick={() => { setSelectedSurah(s); setIsSurahListOpen(false); }} className="p-4 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer text-right">
+                                            {s.number}. {s.name}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                        {/* Reciter Selector */}
+                        <div className="relative">
+                            <button onClick={() => setIsReciterListOpen(!isReciterListOpen)} className="w-full bg-white dark:bg-gray-800 p-4 rounded-lg shadow-md flex justify-between items-center text-right">
+                                <span>{selectedReciter ? selectedReciter.englishName : 'اختر القارئ'}</span>
+                                <ChevronDown />
+                            </button>
+                            {isReciterListOpen && (
+                                <div className="absolute z-20 w-full mt-2 bg-white dark:bg-gray-800 rounded-lg shadow-lg max-h-60 overflow-y-auto border dark:border-gray-700">
+                                    {reciters.map(r => (
+                                        <div key={r.identifier} onClick={() => { setSelectedReciter(r); setIsReciterListOpen(false); }} className="p-4 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer text-right">
+                                            {r.englishName}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                     </div>
 
-                    <main className="bg-white dark:bg-gray-800 p-2 sm:p-6 rounded-lg shadow-md mb-28">
+                    <main className="bg-white dark:bg-gray-800 p-2 sm:p-6 rounded-lg shadow-md mb-40">
                         {selectedSurah && <h2 className="text-2xl font-bold text-center mb-4 font-quran">{selectedSurah.name}</h2>}
                         <div>
-                            {ayahs.map(ayah => <AyahText key={ayah.numberInSurah} ayah={ayah} />)}
+                            {ayahs.length > 0 ? ayahs.map(ayah => <AyahText key={ayah.numberInSurah} ayah={ayah} />) : <p className="text-center p-8">...جاري التحميل</p>}
                         </div>
                     </main>
 
                     <footer className="fixed bottom-0 left-0 right-0 bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm border-t border-gray-200 dark:border-gray-700">
                         <div className="container mx-auto max-w-3xl p-4">
+                             <div className="flex items-center justify-center gap-2 sm:gap-4 mb-3">
+                                <label className="text-sm">وضع التصحيح:</label>
+                                <button onClick={() => setCorrectionMode('words')} className={`px-3 py-1 rounded-full text-sm ${correctionMode === 'words' ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700'}`}>
+                                    الكلمات فقط
+                                </button>
+                                <button onClick={() => setCorrectionMode('detailed')} className={`px-3 py-1 rounded-full text-sm ${correctionMode === 'detailed' ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700'}`}>
+                                    تصحيح دقيق
+                                </button>
+                            </div>
                             <div className="flex items-center justify-center gap-4">
                                 <button onClick={handlePlayPause} className="p-4 bg-green-500 text-white rounded-full shadow-lg hover:bg-green-600 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed" disabled={!selectedSurah || isRecording}>
                                     {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6" />}
@@ -322,13 +360,7 @@
                         </div>
                     </footer>
                     
-                    <audio
-                        ref={audioRef}
-                        onEnded={handleAudioEnded}
-                        onPlay={() => setIsPlaying(true)}
-                        onPause={() => setIsPlaying(false)}
-                        className="hidden"
-                    />
+                    <audio ref={audioRef} onEnded={handleAudioEnded} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} className="hidden" />
 
                     {isAssistantOpen && (
                         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
@@ -338,15 +370,13 @@
                                         <HelpCircle className="w-6 h-6 text-green-500" />
                                         <h3 className="text-xl font-bold">مساعد AyahTrack</h3>
                                     </div>
-                                    <button onClick={() => setIsAssistantOpen(false)} className="p-1 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700">
-                                        <X className="w-5 h-5" />
-                                    </button>
+                                    <button onClick={() => setIsAssistantOpen(false)} className="p-1 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700"><X className="w-5 h-5" /></button>
                                 </div>
                                 <div className="space-y-4 text-right">
-                                    <p><strong>للاستماع:</strong> اضغط على زر التشغيل الأخضر <Play className="inline w-4 h-4 text-green-500"/>.</p>
-                                    <p><strong>للتسميع:</strong> اضغط على زر الميكروفون الأزرق <Mic className="inline w-4 h-4 text-blue-500"/> وابدأ التلاوة.</p>
-                                    <p><strong>للاختبار:</strong> اضغط على زر العين <EyeOff className="inline w-4 h-4 text-gray-500"/> لإخفاء الآية قبل التسميع.</p>
-                                    <p><strong>للحفظ:</strong> اضغط على علامة الكتاب <Bookmark className="inline w-4 h-4 text-yellow-500"/> لحفظ الآية.</p>
+                                    <p><strong>اختر القارئ والسورة</strong> من القوائم في الأعلى.</p>
+                                    <p><strong>اختر وضع التصحيح</strong>: "الكلمات فقط" للمقارنة بدون تشكيل، أو "تصحيح دقيق" لمقارنة تفصيلية للكلمات.</p>
+                                    <p><strong>للتسميع:</strong> اضغط على زر الميكروفون <Mic className="inline w-4 h-4 text-blue-500"/> وابدأ التلاوة. ستظهر الكلمات الصحيحة بالأخضر والخاطئة بالأحمر.</p>
+                                    <p><strong>للاختبار:</strong> اضغط زر العين <EyeOff className="inline w-4 h-4 text-gray-500"/> لإخفاء الآية قبل التسميع.</p>
                                 </div>
                             </div>
                         </div>

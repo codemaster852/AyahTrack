@@ -64,7 +64,7 @@
         const Eye = ({ className }) => <Icon className={className}><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></Icon>;
         const EyeOff = ({ className }) => <Icon className={className}><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></Icon>;
 
-        // Helper functions moved outside the component to prevent re-creation on every render
+        // Helper functions
         const normalizeText = (text, removeTashkeel = true) => {
             if (removeTashkeel) {
                 text = text.replace(/[\u064B-\u0652]/g, ""); // Remove Tashkeel
@@ -108,55 +108,45 @@
             const [rangeTo, setRangeTo] = useState(10);
 
             const audioRef = useRef(null);
+            const preloaderRef = useRef(null); // Ref for preloading audio
             const recognitionRef = useRef(null);
             const ayahRefs = useRef({});
 
             useEffect(() => {
-                fetch('https://api.alquran.cloud/v1/surah')
-                    .then(res => res.json())
-                    .then(data => {
-                        setSurahs(data.data);
-                        if (data.data.length > 0) setSelectedSurah(data.data[0]);
-                    })
-                    .catch(err => console.error("Error fetching surahs:", err));
+                fetch('https://api.alquran.cloud/v1/surah').then(res => res.json()).then(data => {
+                    setSurahs(data.data);
+                    if (data.data.length > 0) setSelectedSurah(data.data[0]);
+                }).catch(err => console.error("Error fetching surahs:", err));
 
-                fetch('https://api.alquran.cloud/v1/edition?format=audio&language=ar&type=versebyverse')
-                    .then(res => res.json())
-                    .then(data => {
-                        const defaultReciter = data.data.find(r => r.identifier === 'ar.alafasy') || data.data[0];
-                        setReciters(data.data);
-                        setSelectedReciter(defaultReciter);
-                    })
-                    .catch(err => console.error("Error fetching reciters:", err));
+                fetch('https://api.alquran.cloud/v1/edition?format=audio&language=ar&type=versebyverse').then(res => res.json()).then(data => {
+                    const defaultReciter = data.data.find(r => r.identifier === 'ar.alafasy') || data.data[0];
+                    setReciters(data.data);
+                    setSelectedReciter(defaultReciter);
+                }).catch(err => console.error("Error fetching reciters:", err));
             }, []);
 
             useEffect(() => {
                 if (selectedSurah && selectedReciter) {
                     setIsPlaying(false);
                     if(audioRef.current) audioRef.current.pause();
-                    fetch(`https://api.alquran.cloud/v1/surah/${selectedSurah.number}/${selectedReciter.identifier}`)
-                        .then(res => res.json())
-                        .then(data => {
-                            setAyahs(data.data.ayahs);
-                            setCurrentAyah(1);
-                            setRangeFrom(1);
-                            setRangeTo(Math.min(10, data.data.ayahs.length));
-                            setHideAyah(false);
-                            setRecitationResult(null);
-                            setFeedback('');
-                        })
-                        .catch(err => console.error(`Error fetching surah data:`, err));
+                    fetch(`https://api.alquran.cloud/v1/surah/${selectedSurah.number}/${selectedReciter.identifier}`).then(res => res.json()).then(data => {
+                        setAyahs(data.data.ayahs);
+                        setCurrentAyah(1);
+                        setRangeFrom(1);
+                        setRangeTo(Math.min(10, data.data.ayahs.length));
+                        setHideAyah(false);
+                        setRecitationResult(null);
+                        setFeedback('');
+                    }).catch(err => console.error(`Error fetching surah data:`, err));
                 }
             }, [selectedSurah, selectedReciter]);
 
             const checkRecitation = useCallback((transcript) => {
                 const originalAyah = ayahs.find(a => a.numberInSurah === currentAyah);
                 if (!originalAyah) return;
-
                 const isWordsOnly = correctionMode === 'words';
                 const diff = generateDiff(originalAyah.text, transcript, isWordsOnly);
                 const isCorrect = !diff.some(d => d.props.className.includes('red'));
-
                 if (isCorrect) {
                     setFeedback('ممتاز! تلاوة صحيحة.');
                     setRecitationResult({ correct: true, text: originalAyah.text });
@@ -164,11 +154,8 @@
                     setFeedback(isWordsOnly ? 'هناك أخطاء في الكلمات.' : 'هناك أخطاء في التلاوة.');
                     setRecitationResult({ correct: false, text: diff });
                 }
-
-                if(hideAyah) {
-                    setHideAyah(false);
-                }
-            }, [ayahs, currentAyah, correctionMode, hideAyah, setFeedback, setRecitationResult, setHideAyah]);
+                if(hideAyah) setHideAyah(false);
+            }, [ayahs, currentAyah, correctionMode, hideAyah]);
 
             useEffect(() => {
                 if ('webkitSpeechRecognition' in window) {
@@ -187,83 +174,73 @@
                         checkRecitation(transcript);
                     };
                     recognitionRef.current = recognition;
-
-                    return () => {
-                        recognition.abort();
-                    };
+                    return () => recognition.abort();
                 } else {
-                    console.warn("Speech Recognition not supported in this browser.");
+                    console.warn("Speech Recognition not supported.");
                 }
             }, [checkRecitation]); 
 
-            const handlePlayPause = () => {
-                if (isPlaying) {
-                    audioRef.current.pause();
-                } else {
-                    let startAyah = currentAyah;
-                    if (playbackMode === 'range') {
-                        const from = parseInt(rangeFrom, 10);
-                        const to = parseInt(rangeTo, 10);
-                        if (isNaN(from) || isNaN(to) || from < 1 || to > ayahs.length || from > to) {
-                            setFeedback('نطاق الآيات المحدد غير صالح.');
-                            return;
-                        }
-                        startAyah = from;
-                    } else if (playbackMode === 'surah' && (currentAyah > ayahs.length || currentAyah < 1)) {
-                         startAyah = 1;
-                    }
-                    
-                    if (startAyah !== currentAyah) {
-                        setCurrentAyah(startAyah);
-                    }
-                }
-                setIsPlaying(prev => !prev);
-            };
+            const handlePlayPause = () => setIsPlaying(prev => !prev);
 
             const handleAudioEnded = () => {
-                if (playbackMode === 'surah') {
-                    if (currentAyah < ayahs.length) {
-                        setCurrentAyah(prev => prev + 1);
-                    } else {
-                        setIsPlaying(false);
-                    }
+                let shouldContinue = false;
+                let nextAyahNumber = currentAyah + 1;
+
+                if (playbackMode === 'surah' && nextAyahNumber <= ayahs.length) {
+                    shouldContinue = true;
                 } else if (playbackMode === 'range') {
                     const to = parseInt(rangeTo, 10);
-                    if (currentAyah < to) {
-                        setCurrentAyah(prev => prev + 1);
-                    } else {
-                        setIsPlaying(false);
+                    if (nextAyahNumber <= to) {
+                        shouldContinue = true;
                     }
+                }
+
+                if (shouldContinue) {
+                    audioRef.current.src = preloaderRef.current.src;
+                    audioRef.current.play().catch(e => console.error("Error playing preloaded audio:", e));
+                    setCurrentAyah(nextAyahNumber);
                 } else {
                     setIsPlaying(false);
                 }
             };
 
             useEffect(() => {
-                if (isPlaying && ayahs.length > 0) {
+                const player = audioRef.current;
+                const preloader = preloaderRef.current;
+                
+                if (isPlaying) {
                     const currentAudioSrc = ayahs.find(a => a.numberInSurah === currentAyah)?.audio;
-                    if (currentAudioSrc) {
-                        if (audioRef.current.src !== currentAudioSrc) {
-                            audioRef.current.src = currentAudioSrc;
-                        }
-                        const playPromise = audioRef.current.play();
-                        if (playPromise !== undefined) {
-                            playPromise.catch(error => {
-                                console.error("Audio play error:", error);
-                                setIsPlaying(false);
-                            });
-                        }
-                    } else {
-                        setIsPlaying(false);
+                    if (currentAudioSrc && player.src !== currentAudioSrc) {
+                        player.src = currentAudioSrc;
                     }
-                } else if (!isPlaying && audioRef.current) {
-                    audioRef.current.pause();
+                    player.play().catch(e => {
+                        console.error("Audio play error:", e);
+                        setIsPlaying(false);
+                    });
+
+                    // Preload logic
+                    let nextAyahToPreload = -1;
+                    if (playbackMode === 'surah' && currentAyah < ayahs.length) {
+                        nextAyahToPreload = currentAyah + 1;
+                    } else if (playbackMode === 'range' && currentAyah < parseInt(rangeTo, 10)) {
+                        nextAyahToPreload = currentAyah + 1;
+                    }
+
+                    if (nextAyahToPreload !== -1) {
+                        const nextAudioSrc = ayahs.find(a => a.numberInSurah === nextAyahToPreload)?.audio;
+                        if (nextAudioSrc) {
+                            preloader.src = nextAudioSrc;
+                            preloader.load();
+                        }
+                    }
+                } else {
+                    player.pause();
                 }
                 
                 if(ayahRefs.current[currentAyah]) {
                     ayahRefs.current[currentAyah].scrollIntoView({ behavior: 'smooth', block: 'center' });
                 }
-            }, [currentAyah, isPlaying, ayahs]);
+            }, [currentAyah, isPlaying, ayahs, playbackMode, rangeTo]);
 
             const handleAyahClick = (ayahNumber) => {
                 setCurrentAyah(ayahNumber);
@@ -381,6 +358,7 @@
                     </footer>
                     
                     <audio ref={audioRef} onEnded={handleAudioEnded} className="hidden" />
+                    <audio ref={preloaderRef} className="hidden" muted />
 
                     {isAssistantOpen && (
                         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
